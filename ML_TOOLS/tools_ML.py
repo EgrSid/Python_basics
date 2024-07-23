@@ -5,8 +5,18 @@ import imblearn.under_sampling as unders
 import imblearn.over_sampling as overs
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
-from sklearn.linear_model import Lasso  # L1-регуляризатор
+from sklearn.linear_model import Lasso
 from matplotlib import pyplot as plt
+from typing import Union, Optional
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.inspection import permutation_importance
+from sklearn.decomposition import PCA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.neighbors import NeighborhoodComponentsAnalysis, KNeighborsClassifier
+import seaborn as sns
+from sklearn.feature_selection import SelectKBest
+from sklearn.feature_selection import f_classif, chi2
+from sklearn.feature_selection import SelectPercentile
 
 
 def check_types(values: list, target_type: tuple | type) -> bool:
@@ -400,7 +410,7 @@ def over_sampling(df: pd.DataFrame, target: str | int | float, method='RandomOve
     return pd.DataFrame(changed_data, changed_labels, columns=df.columns)
 
 
-def l1_models(X, y, l1=tuple(2 ** np.linspace(-10, 10, 100)), scale=False, early_stopping=False, **kwargs):
+def l1_models(X, y, l1=tuple(2 ** np.linspace(-10, 10, 100)), scale=False, early_stopping=False):
     """
         Linear models with different L1-regularization parameters.
 
@@ -435,7 +445,7 @@ def l1_models(X, y, l1=tuple(2 ** np.linspace(-10, 10, 100)), scale=False, early
     return result
 
 
-def l1_importance(X, y, l1=tuple(2 ** np.linspace(-10, 10, 100)), scale=False, early_stopping=False, **kwargs):
+def l1_importance(X, y, l1=tuple(2 ** np.linspace(-10, 10, 100)), scale=False, early_stopping=False):
     """
         Weights features with different L1-regularization parameters.
 
@@ -507,7 +517,7 @@ def l1_importance_plot(x, y, l1=tuple(2 ** np.linspace(-10, 10, 100)), scale=Fal
 
 
 def l1_best_features(x, y, l1_threshold, min_coef, l1=tuple(2 ** np.linspace(-10, 10, 100)), scale=False,
-                     early_stopping=False, **kwargs):
+                     early_stopping=False):
     """
         Finds the best features to train the model based on L1 opinion.
 
@@ -539,3 +549,172 @@ def l1_best_features(x, y, l1_threshold, min_coef, l1=tuple(2 ** np.linspace(-10
     res = df.iloc[l1_place, 1:]
     res = res[abs(res) > min_coef]
     return res
+
+
+def feature_importance_RFC(df: Union[pd.DataFrame, list], target_col: Optional[Union[int, str]], **kwargs) -> pd.Series:
+    """
+    Calculate the feature importance using the Random Forest Classifier.
+
+    Parameters:
+    df (Union[pd.DataFrame, list]): The input data. It can be a DataFrame or a list that will be converted to a DataFrame.
+    target_col (Optional[Union[int, str]]): The index or name of the target column. Default is 8.
+    **kwargs: Additional keyword arguments to pass to the Random Forest Classifier.
+
+    Returns:
+    pd.Series: A series containing feature importances, sorted in descending order.
+    """
+    if not isinstance(df, pd.DataFrame):
+        df = pd.DataFrame(df)
+
+    assert target_col in df.columns, f"target_col name '{target_col}' not found in DataFrame columns."
+
+    X = df.drop(columns=[target_col])
+    Y = df[target_col]
+
+    model = RandomForestClassifier(random_state=1, **kwargs)
+    model.fit(X, Y)
+    imps = pd.Series(model.feature_importances_, index=X.columns)
+    return imps.sort_values(ascending=False)
+
+
+def permutation_importance_RFC(df: Union[pd.DataFrame, list], target_col: Optional[Union[int, str]],
+                               **kwargs) -> pd.Series:
+    """
+    Calculate the feature importance using permutation importance.
+
+    Parameters:
+    df (Union[pd.DataFrame, list]): The input data. It can be a DataFrame or a list that will be converted to a DataFrame.
+    target_col (Optional[Union[int, str]]): The index or name of the target column. Default is 8.
+    **kwargs: Additional keyword arguments to pass to the Random Forest Classifier if a model is not provided.
+
+    Returns:
+    pd.Series: A series containing feature importances, sorted in descending order.
+    """
+    if not isinstance(df, pd.DataFrame):
+        df = pd.DataFrame(df)
+
+    assert target_col in df.columns, f"target_col name '{target_col}' not found in DataFrame columns."
+
+    X = df.drop(columns=[target_col])
+    Y = df[target_col]
+
+    model = RandomForestClassifier(random_state=1, **kwargs)
+
+    model.fit(X, Y)
+    result = permutation_importance(model, X, Y)
+    imps = pd.Series(result['importances_mean'], index=X.columns)
+    return imps.sort_values(ascending=False)
+
+
+def compare_PCA_LDA_NCA(X_train: np.ndarray, X_test: np.ndarray, y_train: np.ndarray, y_test: np.ndarray) -> None:
+    """
+    Compares dimensionality reduction methods PCA, LDA, and NCA, visualizes the results,
+    and evaluates them using a KNN classifier.
+
+    Parameters:
+    - X_train (np.ndarray): Training data array of shape (n_samples, n_features).
+    - X_test (np.ndarray): Test data array of shape (n_samples, n_features).
+    - y_train (np.ndarray): Training labels array of shape (n_samples,).
+    - y_test (np.ndarray): Test labels array of shape (n_samples,).
+
+    Returns:
+    - None
+    """
+
+    # Создание объектов для методов снижения размерности
+    dim_reduction_methods = [
+        ('PCA', PCA(n_components=1), PCA(n_components=2)),
+        ('LDA', LinearDiscriminantAnalysis(n_components=1), LinearDiscriminantAnalysis(n_components=2)),
+        ('NCA', NeighborhoodComponentsAnalysis(n_components=1), NeighborhoodComponentsAnalysis(n_components=2))
+    ]
+
+    # Создание фигуры и сетки подграфиков
+    fig, axa = plt.subplots(3, 2, figsize=(12, 12))
+
+    # Цикл по каждому методу снижения размерности
+    for i, (name, model1, model2) in enumerate(dim_reduction_methods):
+        # Обучение моделей на тренировочных данных
+        model1.fit(X_train, y_train)
+        model2.fit(X_train, y_train)
+
+        # Преобразование данных
+        X_tr1 = model1.transform(X_train)
+        X_tr2 = model2.transform(X_train)
+
+        # Построение scatter plot для данных, уменьшенных до 2 компонент
+        axa[i, 0].scatter(X_tr2[:, 0], X_tr2[:, 1], c=y_train, s=30, cmap='Set1')
+        axa[i, 0].set_title(f"{name}")
+        axa[i, 0].grid()
+
+        # Построение гистограммы для данных, уменьшенных до 1 компоненты
+        sns.histplot(x=X_tr1.ravel(), hue=y_train, ax=axa[i, 1], element="poly")
+        axa[i, 1].grid()
+
+        # Создание и обучение классификатора KNN
+        knn = KNeighborsClassifier(n_neighbors=5)
+        knn.fit(X_tr2, y_train)
+
+        # Оценка точности классификатора на тестовых данных
+        test_score = knn.score(model2.transform(X_test), y_test)
+        axa[i, 0].set_title(f"{name}\nTest Score: {test_score:.2f}")
+
+    # Отображение всех графиков
+    plt.tight_layout()
+    plt.show()
+
+
+def select_k_best_features(
+        x_train: pd.DataFrame, x_test: pd.DataFrame, y_train: pd.Series, k_best: int = 5
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Select the k best features using the ANOVA F-value method.
+
+    Parameters:
+    - x_train (pd.DataFrame): The training data.
+    - x_test (pd.DataFrame): The test data.
+    - y_train (pd.Series): The training labels.
+    - k_best (int): The number of features to select. Default is 5.
+
+    Returns:
+    - pd.DataFrame: The transformed training data with the k best features.
+    - pd.DataFrame: The transformed test data with the k best features.
+    """
+
+    # Initialize the SelectKBest object with the ANOVA F-value method
+    selector = SelectKBest(f_classif, k=k_best)
+
+    # Fit the selector on the training data and transform both training and test data
+    x_train_new = selector.fit_transform(x_train, y_train)
+    x_test_new = selector.transform(x_test)
+
+    # Return the transformed data and the fitted selector
+    return (x_train_new, x_test_new)
+
+
+def select_percentile_features(
+        x_train: pd.DataFrame, x_test: pd.DataFrame, y_train: pd.Series, percentile: int = 80
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Select features based on a percentile of the highest scores using the chi-squared test.
+
+    Parameters:
+    - x_train (pd.DataFrame): The training data.
+    - x_test (pd.DataFrame): The test data.
+    - y_train (pd.Series): The training labels.
+    - percentile (int): The percentile of features to select. Default is 80.
+
+    Returns:
+    - tuple[pd.DataFrame, pd.DataFrame]:
+        - The transformed training data with the selected features.
+        - The transformed test data with the selected features.
+    """
+
+    # Initialize the SelectPercentile object with the chi-squared test
+    selector = SelectPercentile(chi2, percentile=percentile)
+
+    # Fit the selector on the training data and transform both training and test data
+    x_train_new = selector.fit_transform(x_train, y_train)
+    x_test_new = selector.transform(x_test)
+
+    # Return the transformed data
+    return x_train_new, x_test_new

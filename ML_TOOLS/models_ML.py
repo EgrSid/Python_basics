@@ -1,5 +1,5 @@
 import joblib
-from typing import Any, Dict, List, Tuple, Type, Union
+from typing import Any, Dict, List, Tuple, Type, Union, Optional
 import numpy as np
 from matplotlib import pyplot as plt
 from sklearn.base import BaseEstimator
@@ -7,6 +7,8 @@ from sklearn.utils import all_estimators
 from sklearn.metrics import ConfusionMatrixDisplay, roc_curve
 from sklearn.neighbors import NearestNeighbors
 from Levenshtein import distance as lev_dist
+from scipy.spatial.distance import minkowski, cityblock, cosine, euclidean
+from pandas import DataFrame, Series
 import pandas as pd
 # Импорт метрик для оценки модели (scores)
 from sklearn.metrics import (
@@ -185,6 +187,32 @@ class Model:
         assert self.__model is not None, "Model is not defined."
         return self.__model.get_params(*args, **kwargs)
 
+    def report(self, y_true: Any, y_pred: Any) -> Dict[str, float]:
+        """
+        Generate a report of all metrics.
+
+        Parameters:
+        y_true (Any): True values.
+        y_pred (Any): Predicted values.
+
+        Returns:
+        Dict[str, float]: Dictionary with metric names as keys and their values.
+        """
+        assert type(self).__name__ in ('Regressor', 'Classifier'), 'errorrrr'
+
+        metrics = [func for func in type(self).__dict__ if not func.startswith("__") and func not in self.stop_methods]
+
+        report = {}
+        for metric in metrics:
+            method = getattr(self, metric)
+            try:
+                result = method(y_true, y_pred)
+                report[metric] = result
+            except Exception as e:
+                print(f"Error calculating {metric}: {e}")
+
+        return report
+
 
 class Regressor(Model):
     def __init__(self, model: Type[BaseEstimator] = None) -> None:
@@ -195,6 +223,7 @@ class Regressor(Model):
         model (Type[BaseEstimator], optional): The model to use. Defaults to None.
         """
         super().__init__(model)
+        self.stop_methods = ['func']
 
     def r2_score(self, y_test: Any, y_pred: Any, *args: Any, **kwargs: Any) -> float:
         """
@@ -344,6 +373,10 @@ class Regressor(Model):
         """
         return np.sqrt(mean_squared_log_error(y_true, y_pred, *args, **kwargs))
 
+    def func(self):
+        # type(self).__dict__
+        return dir(self)
+
 
 class Classifier(Model):
     def __init__(self, model: Type[BaseEstimator] = None) -> None:
@@ -354,6 +387,7 @@ class Classifier(Model):
         model (Type[BaseEstimator], optional): The model to use. Defaults to None.
         """
         super().__init__(model)
+        self.stop_methods = ['roc_auc_plot', 'confusion_matrix_display']
 
     def accuracy_score(self, y_true: Any, y_pred: Any, *args: Any,
                        **kwargs: Any) -> float:
@@ -784,6 +818,7 @@ class Cluster(Model):
         model (Type[BaseEstimator], optional): The model to use. Defaults to None.
         """
         super().__init__(model)
+        self.stop_methods = []
 
     def elbow_method(self, x_train: Any, max_k: int) -> List[float]:
         """
@@ -848,9 +883,29 @@ class Cluster(Model):
             prev = cur
         return 'It is impossible to find the optimal number of clusters with a given threshold'
 
+    def report(self, y_true: Any, y_pred: Any) -> Dict[str, float]:
+        """
+        Calculate the classification report.
+
+        Parameters:
+        y_true (Any): True values.
+        y_pred (Any): Predicted values.
+
+        Returns:
+        Dict[str, float]: Classification report.
+        """
+        metrics = [minkowski, cityblock, cosine, euclidean, lev_dist]
+        report = {}
+        for metric in metrics:
+            try:
+                report[metric.__name__] = metric(y_true, y_pred)
+            except Exception as e:
+                print(f"Error calculating {metric.__name__}: {e}")
+        return report
+
 
 class RecommendSystem:
-    def __init__(self, based_on=None):
+    def __init__(self, based_on: Optional[Any] = None) -> None:
         """
         Constructor to initialize the RecommendSystem class.
 
@@ -859,7 +914,7 @@ class RecommendSystem:
         """
         self.__based_on = based_on
 
-    def fit(self, X, y, **kwargs):
+    def fit(self, X: DataFrame, y: Series, **kwargs: Any) -> None:
         """
         Fit the recommendation model with provided data.
 
@@ -891,7 +946,7 @@ class RecommendSystem:
         )
         self.__model.fit(self.df)
 
-    def predict(self, x, **kwargs):
+    def predict(self, x: Union[DataFrame, List[Any]], **kwargs: Any) -> List[DataFrame]:
         """
         Predict recommendations for the given input.
 
@@ -903,25 +958,21 @@ class RecommendSystem:
         Returns:
         list of DataFrames: Each DataFrame contains the recommendations and distances for the corresponding input.
         """
-        # Проверка, является ли x DataFrame
         if not isinstance(x, pd.DataFrame):
             x = pd.DataFrame([x])
 
-        # Получение ближайших соседей
         result = self.__model.kneighbors(x, return_distance=True)
-        res_recomends = []  # результирующие рекоммендации
-        # добавляем рекоммендации и дистанцию от фильма по заданным параметром до рекоммендованного
+        res_recomends = []
         for example, dist in zip(result[1], result[0]):
             temp_df = self.df.copy()
             temp_df['recommendation'] = example
             temp_df['distance'] = dist
             temp_df.sort_values('distance', inplace=True, ascending=kwargs.get('ascending', False))
             temp_df.reset_index(inplace=True, drop=True)
-            # добавляем каждому набору признаков свои рекоммендации
             res_recomends.append(temp_df)
         return res_recomends
 
-    def levenshtein_distance_handmade(self, s1, s2):
+    def levenshtein_distance_handmade(self, s1: str, s2: str) -> int:
         """
         Calculate the Levenshtein distance between two strings.
 
@@ -935,27 +986,24 @@ class RecommendSystem:
         len_s1 = len(s1)
         len_s2 = len(s2)
 
-        # Создаем матрицу размером (len_s1 + 1) x (len_s2 + 1)
         dp = [[0] * (len_s2 + 1) for _ in range(len_s1 + 1)]
 
-        # Инициализируем первую строку и первый столбец
         for i in range(len_s1 + 1):
             dp[i][0] = i
 
         for j in range(len_s2 + 1):
             dp[0][j] = j
 
-        # Заполняем матрицу
         for i in range(1, len_s1 + 1):
             for j in range(1, len_s2 + 1):
                 cost = 0 if s1[i - 1] == s2[j - 1] else 1
-                dp[i][j] = min(dp[i - 1][j] + 1,  # Удаление
-                               dp[i][j - 1] + 1,  # Вставка
-                               dp[i - 1][j - 1] + cost)  # Замена или совпадение
+                dp[i][j] = min(dp[i - 1][j] + 1,
+                               dp[i][j - 1] + 1,
+                               dp[i - 1][j - 1] + cost)
 
         return dp[len_s1][len_s2]
 
-    def report(self, x, **kwargs):
+    def report(self, x: Union[DataFrame, List[Any]], **kwargs: Any) -> DataFrame:
         """
         Generate a report of recommendations using various distance metrics.
 
@@ -974,7 +1022,7 @@ class RecommendSystem:
             x = pd.DataFrame([x])
 
         recommendation_metrics = ['minkowski', 'cityblock', 'cosine', 'euclidean', 'haversine',
-                                  'l1', 'l2', 'manhattan', 'nan_euclidean', lev_dist]
+                                  'l1', 'l2', 'manhattan', 'nan_euclidean', self.levenshtein_distance_handmade]
         temp_df = self.df.copy()
         for metric in recommendation_metrics:
             model = NearestNeighbors(
@@ -995,3 +1043,4 @@ class RecommendSystem:
                             ascending=kwargs.get('ascending', False))
         temp_df.reset_index(inplace=True, drop=True)
         return temp_df
+
